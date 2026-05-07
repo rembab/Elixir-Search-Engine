@@ -16,7 +16,7 @@ defmodule JsonLoader do
   def load_n(filename, n, fields_to_keep) do
     json_map =
       filename
-      |> File.stream!()
+      |> File.stream!(read_ahead: 100_000)
       |> Stream.flat_map(fn line ->
         case JSON.decode(line) do
           {:ok, map} -> [map]
