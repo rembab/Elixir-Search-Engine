@@ -1,57 +1,163 @@
 defmodule Database do
   use GenServer
 
-  @doc """
-  Starts a new bucket.
-  """
-  def start_link(opts) do
+  alias Exqlite.Sqlite3
+
+  def start_link(db_path) when is_binary(db_path) do
+    GenServer.start_link(__MODULE__, db_path, name: __MODULE__)
   end
 
-  @doc """
-  Gets a value from the `bucket` by `key`.
-  """
-  def get(bucket, key) do
-    GenServer.call(bucket, {:get, key})
+  def reload_database(json_path, title_field, content_field, n) do
+    GenServer.call(__MODULE__, :reset_table)
+
+    JsonLoader.load_n(json_path, [title_field, content_field], n)
+    |> Stream.map(fn map ->
+      %{
+        title: map[title_field],
+        content: map[content_field],
+        embed: [0]
+      }
+    end)
+    |> Stream.chunk_every(1000)
+    |> Stream.each(&batch_write/1)
+    |> Stream.run()
   end
 
-  @doc """
-  Puts the `value` for the given `key` in the `bucket`.
-  """
-  def put(bucket, key, value) do
-    GenServer.call(bucket, {:put, key, value})
+  def write(title, content, embed) do
+    GenServer.call(__MODULE__, {:write, title, content, embed})
   end
 
-  @doc """
-  Deletes `key` from `bucket`.
-
-  Returns the current value of `key`, if `key` exists.
-  """
-  def delete(bucket, key) do
-    GenServer.call(bucket, {:delete, key})
+  def batch_write(documents) when is_list(documents) do
+    GenServer.call(__MODULE__, {:batch_write, documents}, :infinity)
   end
 
-  ### Callbacks
+  def count() do
+    GenServer.call(__MODULE__, :count)
+  end
+
+  def stream_documents() do
+    db_path = GenServer.call(__MODULE__, :get_db_path)
+
+    Stream.resource(
+      fn ->
+        {:ok, conn} = Sqlite3.open(db_path)
+
+        {:ok, statement} =
+          Sqlite3.prepare(conn, "SELECT id, title, content, embed FROM documents")
+
+        %{conn: conn, statement: statement}
+      end,
+      fn %{conn: conn, statement: statement} = state ->
+        case Sqlite3.step(conn, statement) do
+          {:row, [id, title, content, embed_blob]} ->
+            record = %{
+              id: id,
+              title: title,
+              content: content,
+              embed: :erlang.binary_to_term(embed_blob)
+            }
+
+            {[record], state}
+
+          :done ->
+            {:halt, state}
+        end
+      end,
+      fn %{conn: conn, statement: statement} ->
+        Sqlite3.release(conn, statement)
+        Sqlite3.close(conn)
+      end
+    )
+  end
 
   @impl true
-  def init(:new) do
-    json_stream = JsonLoader.load_n("data/arxiv_metadata.json", 10, ["title", "abstract"])
-    state = %{}
-    {:ok, state}
+  def init(db_path) do
+    {:ok, conn} = Sqlite3.open(db_path)
+
+    :ok = Sqlite3.execute(conn, "PRAGMA journal_mode=WAL;")
+
+    create_table(conn)
+
+    {:ok, %{conn: conn, db_path: db_path}}
   end
 
   @impl true
-  def handle_call({:get, key}, _from, state) do
-    value = get_in(state.bucket[key])
-    {:reply, value, state}
-  end
+  def handle_call(:reset_table, _from, %{conn: conn} = state) do
+    :ok = Sqlite3.execute(conn, "DROP TABLE IF EXISTS documents")
+    create_table(conn)
 
-  def handle_call({:put, key, value}, _from, state) do
-    state = put_in(state.bucket[key], value)
     {:reply, :ok, state}
   end
 
-  def handle_call({:delete, key}, _from, state) do
-    {value, state} = pop_in(state.bucket[key])
-    {:reply, value, state}
+  @impl true
+  def handle_call({:write, title, content, embed}, _from, %{conn: conn} = state) do
+    embed_blob = :erlang.term_to_binary(embed)
+
+    query = "INSERT INTO documents (title, content, embed) VALUES (?1, ?2, ?3)"
+    {:ok, statement} = Sqlite3.prepare(conn, query)
+
+    :ok = Sqlite3.bind(statement, [title, content, embed_blob])
+    :done = Sqlite3.step(conn, statement)
+    :ok = Sqlite3.release(conn, statement)
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:batch_write, documents}, _from, %{conn: conn} = state) do
+    :ok = Sqlite3.execute(conn, "BEGIN TRANSACTION")
+
+    query = "INSERT INTO documents (title, content, embed) VALUES (?1, ?2, ?3)"
+    {:ok, statement} = Sqlite3.prepare(conn, query)
+
+    Enum.each(documents, fn %{title: title, content: content, embed: embed} ->
+      embed_blob = :erlang.term_to_binary(embed)
+
+      :ok = Sqlite3.bind(statement, [title, content, embed_blob])
+      :done = Sqlite3.step(conn, statement)
+    end)
+
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.execute(conn, "COMMIT")
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call(:count, _from, %{conn: conn} = state) do
+    {:ok, statement} = Sqlite3.prepare(conn, "SELECT MAX(id) FROM documents")
+
+    count =
+      case Sqlite3.step(conn, statement) do
+        {:row, [total]} when is_integer(total) -> total
+        _ -> 0
+      end
+
+    :ok = Sqlite3.release(conn, statement)
+
+    {:reply, count, state}
+  end
+
+  @impl true
+  def handle_call(:get_db_path, _from, %{db_path: db_path} = state) do
+    {:reply, db_path, state}
+  end
+
+  @impl true
+  def terminate(_reason, %{conn: conn}) do
+    Sqlite3.close(conn)
+  end
+
+  defp create_table(conn) do
+    create_sql = """
+    CREATE TABLE IF NOT EXISTS documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      embed BLOB
+    )
+    """
+
+    :ok = Sqlite3.execute(conn, create_sql)
   end
 end

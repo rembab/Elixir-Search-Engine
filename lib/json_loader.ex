@@ -13,7 +13,7 @@ defmodule JsonLoader do
   Keeps only the fields specified in fields_to_keep
 
   """
-  def load_n(filename, n, fields_to_keep) do
+  def load_all(filename, fields_to_keep) do
     json_map =
       filename
       |> File.stream!(read_ahead: 100_000)
@@ -23,8 +23,12 @@ defmodule JsonLoader do
           _ -> []
         end
       end)
-      |> Stream.take(n)
 
     filter_fields(json_map, fields_to_keep)
+  end
+
+  def load_n(filename, fields_to_keep, n) do
+    load_all(filename, fields_to_keep)
+    |> Stream.take(n)
   end
 end
