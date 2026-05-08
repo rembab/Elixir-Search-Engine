@@ -2,6 +2,7 @@ defmodule SEMath do
   def stem_text(str) do
     str
     |> String.replace(~r/[^\w\s]/u, "")
+    |> String.downcase()
     |> String.split()
     |> Enum.reject(&Text.Stopwords.contains?(:en, &1))
     |> Enum.map(&Stemmer.stem(&1))

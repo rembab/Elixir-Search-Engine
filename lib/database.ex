@@ -13,13 +13,31 @@ defmodule Database do
     JsonLoader.load_n(json_path, [title_field, content_field], n)
     |> Stream.map(fn map ->
       %{
-        title: map[title_field],
-        content: map[content_field],
+        title: map[title_field] || "",
+        content: map[content_field] || "",
         embed: [0]
       }
     end)
     |> Stream.chunk_every(1000)
-    |> Stream.each(&batch_write/1)
+    |> Stream.each(fn chunk ->
+      batch_write(chunk)
+
+      chunk_dict =
+        Enum.reduce(chunk, %{}, fn doc, acc ->
+          text = doc.title <> " " <> doc.content
+          words = SEMath.stem_text(text)
+
+          local_freqs = Enum.frequencies(words)
+
+          Enum.reduce(local_freqs, acc, fn {word, count}, inner_acc ->
+            Map.update(inner_acc, word, {1, count}, fn {current_df, current_tf} ->
+              {current_df + 1, current_tf + count}
+            end)
+          end)
+        end)
+
+      batch_update_dictionary(chunk_dict)
+    end)
     |> Stream.run()
   end
 
@@ -29,6 +47,10 @@ defmodule Database do
 
   def batch_write(documents) when is_list(documents) do
     GenServer.call(__MODULE__, {:batch_write, documents}, :infinity)
+  end
+
+  def batch_update_dictionary(term_stats) when is_map(term_stats) do
+    GenServer.call(__MODULE__, {:batch_update_dictionary, term_stats}, :infinity)
   end
 
   def count() do
@@ -76,7 +98,7 @@ defmodule Database do
 
     :ok = Sqlite3.execute(conn, "PRAGMA journal_mode=WAL;")
 
-    create_table(conn)
+    create_tables(conn)
 
     {:ok, %{conn: conn, db_path: db_path}}
   end
@@ -84,7 +106,8 @@ defmodule Database do
   @impl true
   def handle_call(:reset_table, _from, %{conn: conn} = state) do
     :ok = Sqlite3.execute(conn, "DROP TABLE IF EXISTS documents")
-    create_table(conn)
+    :ok = Sqlite3.execute(conn, "DROP TABLE IF EXISTS dictionary")
+    create_tables(conn)
 
     {:reply, :ok, state}
   end
@@ -124,6 +147,31 @@ defmodule Database do
   end
 
   @impl true
+  def handle_call({:batch_update_dictionary, term_stats}, _from, %{conn: conn} = state) do
+    :ok = Sqlite3.execute(conn, "BEGIN TRANSACTION")
+
+    query = """
+    INSERT INTO dictionary (term, document_frequency, global_frequency)
+    VALUES (?1, ?2, ?3)
+    ON CONFLICT(term) DO UPDATE SET 
+      document_frequency = document_frequency + excluded.document_frequency,
+      global_frequency = global_frequency + excluded.global_frequency
+    """
+
+    {:ok, statement} = Sqlite3.prepare(conn, query)
+
+    Enum.each(term_stats, fn {term, {df, tf}} ->
+      :ok = Sqlite3.bind(statement, [term, df, tf])
+      :done = Sqlite3.step(conn, statement)
+    end)
+
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.execute(conn, "COMMIT")
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
   def handle_call(:count, _from, %{conn: conn} = state) do
     {:ok, statement} = Sqlite3.prepare(conn, "SELECT MAX(id) FROM documents")
 
@@ -148,14 +196,20 @@ defmodule Database do
     Sqlite3.close(conn)
   end
 
-  defp create_table(conn) do
+  defp create_tables(conn) do
     create_sql = """
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       content TEXT NOT NULL,
       embed BLOB
-    )
+    );
+    CREATE TABLE IF NOT EXISTS dictionary (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      term TEXT UNIQUE NOT NULL,
+      document_frequency INTEGER NOT NULL,
+      global_frequency INTEGER NOT NULL
+    );
     """
 
     :ok = Sqlite3.execute(conn, create_sql)
