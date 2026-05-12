@@ -32,4 +32,20 @@ defmodule SEMath do
     end)
     |> Enum.into(%{})
   end
+
+  def words_to_vector(words, total_docs, dict_map) do
+      tf_map = Enum.frequencies(words)
+      Enum.reduce(tf_map, [], fn {word, tf}, acc ->
+              case Map.get(dict_map, word) do
+                {word_id, df, _} when df > 0 ->
+                  idf = :math.log(total_docs / df)
+                  weight = tf * idf
+                  [{word_id, weight} | acc]
+
+                _ ->
+                  acc
+              end
+            end)
+
+  end
 end

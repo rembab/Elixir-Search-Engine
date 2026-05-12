@@ -19,12 +19,16 @@ defmodule Database do
     GenServer.call(__MODULE__, {:batch_update_dictionary, term_stats}, :infinity)
   end
 
-  def batch_write_matrix(matrix_entries) when is_list(matrix_entries) do
-    GenServer.call(__MODULE__, {:batch_write_matrix, matrix_entries}, :infinity)
+  def batch_write_matrix(matrix_name, matrix_entries) when is_list(matrix_entries) do
+    GenServer.call(__MODULE__, {:batch_write_matrix, matrix_name, matrix_entries}, :infinity)
   end
 
   def count() do
     GenServer.call(__MODULE__, :count)
+  end
+
+  def prepare_matrix_table(name) do
+    GenServer.call(__MODULE__, {:prepare_matrix_table, name})
   end
 
   def stream_documents() do
@@ -90,6 +94,24 @@ defmodule Database do
     {:reply, :ok, state}
   end
 
+  @impl true
+  def handle_call({:prepare_matrix_table, matrix_name}, _from, %{conn: conn} = state) do
+    drop_sql = "DROP TABLE IF EXISTS #{matrix_name};"
+    :ok = Sqlite3.execute(conn, drop_sql)
+
+    create_sql = """
+    CREATE TABLE #{matrix_name} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id INTEGER NOT NULL,
+      term_id INTEGER NOT NULL,
+      val FLOAT(24) NOT NULL,
+      UNIQUE(doc_id, term_id)
+    );
+    """
+    :ok = Sqlite3.execute(conn, create_sql)
+
+    {:reply, :ok, state}
+  end
   @impl true
   def handle_call({:write_doc, title, content, embed}, _from, %{conn: conn} = state) do
     embed_blob = :erlang.term_to_binary(embed)
@@ -200,11 +222,11 @@ defmodule Database do
   end
 
   @impl true
-  def handle_call({:batch_write_matrix, vals}, _from, %{conn: conn} = state) do
+  def handle_call({:batch_write_matrix, matrix_name, vals}, _from, %{conn: conn} = state) do
     :ok = Sqlite3.execute(conn, "BEGIN TRANSACTION")
 
     query = """
-    INSERT INTO matrix (doc_id, term_id, val)
+    INSERT INTO #{matrix_name} (doc_id, term_id, val)
     VALUES (?1, ?2, ?3)
     """
 
@@ -225,6 +247,7 @@ defmodule Database do
   def handle_call(:get_db_path, _from, %{db_path: db_path} = state) do
     {:reply, db_path, state}
   end
+
 
   @impl true
   def terminate(_reason, %{conn: conn}) do
@@ -255,14 +278,9 @@ defmodule Database do
       document_frequency INTEGER NOT NULL,
       global_frequency INTEGER NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS matrix (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      doc_id INTEGER NOT NULL,
-      term_id INTEGER NOT NULL,
-      val FLOAT(24) NOT NULL
-    );
     """
 
     :ok = Sqlite3.execute(conn, create_sql)
   end
+
 end

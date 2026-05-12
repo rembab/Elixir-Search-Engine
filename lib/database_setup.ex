@@ -33,9 +33,10 @@ defmodule Database.Setup do
     |> Stream.run()
   end
 
-  def vectorize_documents_and_build_matrix() do
+  def vectorize_documents_and_build_matrix(matrix_name) do
     total_docs = Database.count()
     dict_map = Database.get_dictionary_map()
+    Database.prepare_matrix_table(matrix_name)
 
     Database.stream_documents()
     |> Stream.chunk_every(1000)
@@ -45,21 +46,8 @@ defmodule Database.Setup do
           text = doc.title <> " " <> doc.content
           words = SEMath.stem_text(text)
 
-          tf_map = Enum.frequencies(words)
-
-          vector =
-            Enum.reduce(tf_map, [], fn {word, tf}, acc ->
-              case Map.get(dict_map, word) do
-                {word_id, df, _} when df > 0 ->
-                  idf = :math.log(total_docs / df)
-                  weight = tf * idf
-                  [{word_id, weight} | acc]
-
-                _ ->
-                  acc
-              end
-            end)
-
+          vector = SEMath.words_to_vector(words, total_docs, dict_map)
+            
           %{id: doc.id, embed: vector}
         end)
 
@@ -71,7 +59,7 @@ defmodule Database.Setup do
         end)
 
       Database.batch_update_embeds(updates)
-      Database.batch_write_matrix(matrix_entries)
+      Database.batch_write_matrix(matrix_name,matrix_entries)
     end)
     |> Stream.run()
   end
