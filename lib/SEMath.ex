@@ -32,33 +32,4 @@ defmodule SEMath do
     end)
     |> Enum.into(%{})
   end
-
-  def build_sparse_matrix(documents, text_key, vocab_map, global_dict) do
-    total_docs = Enum.count(documents)
-
-    documents
-    |> Stream.with_index()
-    |> Stream.flat_map(fn {doc, doc_index} ->
-      text = Map.get(doc, text_key, "")
-
-      word_frequencies =
-        stem_text(text)
-        |> Enum.frequencies()
-
-      Enum.map(word_frequencies, fn {word, tf} ->
-        case Map.get(vocab_map, word) do
-          nil ->
-            nil
-
-          term_index ->
-            {_global_tf, df} = Map.get(global_dict, word, {0, 1})
-            idf = :math.log(total_docs / df)
-            tf_idf = tf * idf
-            {term_index, doc_index, tf_idf}
-        end
-      end)
-      |> Enum.reject(&is_nil/1)
-    end)
-    |> Enum.to_list()
-  end
 end

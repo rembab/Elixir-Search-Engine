@@ -7,50 +7,20 @@ defmodule Database do
     GenServer.start_link(__MODULE__, db_path, name: __MODULE__)
   end
 
-  def reload_database(json_path, title_field, content_field, n) do
-    GenServer.call(__MODULE__, :reset_table)
-
-    JsonLoader.load_n(json_path, [title_field, content_field], n)
-    |> Stream.map(fn map ->
-      %{
-        title: map[title_field] || "",
-        content: map[content_field] || "",
-        embed: [0]
-      }
-    end)
-    |> Stream.chunk_every(1000)
-    |> Stream.each(fn chunk ->
-      batch_write(chunk)
-
-      chunk_dict =
-        Enum.reduce(chunk, %{}, fn doc, acc ->
-          text = doc.title <> " " <> doc.content
-          words = SEMath.stem_text(text)
-
-          local_freqs = Enum.frequencies(words)
-
-          Enum.reduce(local_freqs, acc, fn {word, count}, inner_acc ->
-            Map.update(inner_acc, word, {1, count}, fn {current_df, current_tf} ->
-              {current_df + 1, current_tf + count}
-            end)
-          end)
-        end)
-
-      batch_update_dictionary(chunk_dict)
-    end)
-    |> Stream.run()
+  def write_document(title, content, embed) do
+    GenServer.call(__MODULE__, {:write_doc, title, content, embed})
   end
 
-  def write(title, content, embed) do
-    GenServer.call(__MODULE__, {:write, title, content, embed})
-  end
-
-  def batch_write(documents) when is_list(documents) do
-    GenServer.call(__MODULE__, {:batch_write, documents}, :infinity)
+  def batch_write_documents(documents) when is_list(documents) do
+    GenServer.call(__MODULE__, {:batch_write_doc, documents}, :infinity)
   end
 
   def batch_update_dictionary(term_stats) when is_map(term_stats) do
     GenServer.call(__MODULE__, {:batch_update_dictionary, term_stats}, :infinity)
+  end
+
+  def batch_write_matrix(matrix_entries) when is_list(matrix_entries) do
+    GenServer.call(__MODULE__, {:batch_write_matrix, matrix_entries}, :infinity)
   end
 
   def count() do
@@ -92,6 +62,14 @@ defmodule Database do
     )
   end
 
+  def get_dictionary_map() do
+    GenServer.call(__MODULE__, :get_dictionary_map)
+  end
+
+  def batch_update_embeds(updates) when is_list(updates) do
+    GenServer.call(__MODULE__, {:batch_update_embeds, updates}, :infinity)
+  end
+
   @impl true
   def init(db_path) do
     {:ok, conn} = Sqlite3.open(db_path)
@@ -113,7 +91,7 @@ defmodule Database do
   end
 
   @impl true
-  def handle_call({:write, title, content, embed}, _from, %{conn: conn} = state) do
+  def handle_call({:write_doc, title, content, embed}, _from, %{conn: conn} = state) do
     embed_blob = :erlang.term_to_binary(embed)
 
     query = "INSERT INTO documents (title, content, embed) VALUES (?1, ?2, ?3)"
@@ -127,7 +105,7 @@ defmodule Database do
   end
 
   @impl true
-  def handle_call({:batch_write, documents}, _from, %{conn: conn} = state) do
+  def handle_call({:batch_write_doc, documents}, _from, %{conn: conn} = state) do
     :ok = Sqlite3.execute(conn, "BEGIN TRANSACTION")
 
     query = "INSERT INTO documents (title, content, embed) VALUES (?1, ?2, ?3)"
@@ -187,6 +165,63 @@ defmodule Database do
   end
 
   @impl true
+  def handle_call(:get_dictionary_map, _from, %{conn: conn} = state) do
+    {:ok, statement} =
+      Sqlite3.prepare(
+        conn,
+        "SELECT id, term, document_frequency, global_frequency FROM dictionary"
+      )
+
+    dict_map = fetch_dict_rows(conn, statement, %{})
+
+    :ok = Sqlite3.release(conn, statement)
+
+    {:reply, dict_map, state}
+  end
+
+  @impl true
+  def handle_call({:batch_update_embeds, updates}, _from, %{conn: conn} = state) do
+    :ok = Sqlite3.execute(conn, "BEGIN TRANSACTION")
+
+    query = "UPDATE documents SET embed = ?1 WHERE id = ?2"
+    {:ok, statement} = Sqlite3.prepare(conn, query)
+
+    Enum.each(updates, fn %{id: id, embed: embed} ->
+      embed_blob = :erlang.term_to_binary(embed)
+
+      :ok = Sqlite3.bind(statement, [embed_blob, id])
+      :done = Sqlite3.step(conn, statement)
+    end)
+
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.execute(conn, "COMMIT")
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:batch_write_matrix, vals}, _from, %{conn: conn} = state) do
+    :ok = Sqlite3.execute(conn, "BEGIN TRANSACTION")
+
+    query = """
+    INSERT INTO matrix (doc_id, term_id, val)
+    VALUES (?1, ?2, ?3)
+    """
+
+    {:ok, statement} = Sqlite3.prepare(conn, query)
+
+    Enum.each(vals, fn %{doc_id: doc_id, term_id: term_id, val: val} ->
+      :ok = Sqlite3.bind(statement, [doc_id, term_id, val])
+      :done = Sqlite3.step(conn, statement)
+    end)
+
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.execute(conn, "COMMIT")
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
   def handle_call(:get_db_path, _from, %{db_path: db_path} = state) do
     {:reply, db_path, state}
   end
@@ -194,6 +229,16 @@ defmodule Database do
   @impl true
   def terminate(_reason, %{conn: conn}) do
     Sqlite3.close(conn)
+  end
+
+  defp fetch_dict_rows(conn, statement, acc) do
+    case Sqlite3.step(conn, statement) do
+      {:row, [id, term, df, gf]} ->
+        fetch_dict_rows(conn, statement, Map.put(acc, term, {id, df, gf}))
+
+      :done ->
+        acc
+    end
   end
 
   defp create_tables(conn) do
@@ -209,6 +254,12 @@ defmodule Database do
       term TEXT UNIQUE NOT NULL,
       document_frequency INTEGER NOT NULL,
       global_frequency INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS matrix (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id INTEGER NOT NULL,
+      term_id INTEGER NOT NULL,
+      val FLOAT(24) NOT NULL
     );
     """
 
