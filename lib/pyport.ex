@@ -5,15 +5,23 @@ defmodule PythonPort do
     GenServer.start_link(__MODULE__, db_path, name: __MODULE__)
   end
 
-  def search(matrix_name, query_vector, top_k) do
-    GenServer.call(__MODULE__, {:search, matrix_name, query_vector, top_k}, :infinity)
+  def search(matrix_name, query, top_k) do
+    vector =
+      query
+      |> SEMath.stem_text()
+      |> SEMath.words_to_vector(Database.count(), Database.get_dictionary_map())
+
+    GenServer.call(__MODULE__, {:search, matrix_name, vector, top_k}, :infinity)
   end
 
   @impl true
   def init(db_path) do
-    port = Port.open({:spawn, "python3 lib/pySEMath.py --db #{db_path}"}, 
-      [:binary, :line, :hide]
-    )
+    port =
+      Port.open(
+        {:spawn, "python3 lib/pySEMath.py --db #{db_path}"},
+        [:binary, :line, :hide]
+      )
+
     {:ok, %{port: port}}
   end
 

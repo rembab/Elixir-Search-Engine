@@ -11,13 +11,36 @@ defmodule Search_Engine do
       :world
 
   """
-  def start() do
-    Database.start_link("data/db/arxiv.db")
-    PythonPort.start_link("data/db/arxiv.db")
+
+  def start(db_name \\ "arxiv.db") do
+    db_path = "data/db/#{db_name}"
+
+    IO.puts("Loading db #{db_name}")
+    Database.start_link(db_path)
+
+    IO.puts("Starting python math engine")
+    PythonPort.start_link(db_path)
   end
 
-  def reload_database(n) do
-    Database.Setup.reload_database("data/arxiv_metadata.json", "title", "abstract", n)
+  def reload_database(
+        json \\ "data/arxiv_metadata.json",
+        title_field \\ "title",
+        content_field \\ "abstract",
+        base_matrix_name \\ "full_matrix",
+        n
+      ) do
+    IO.puts("Loading documents and dictionary")
+
+    {micros, _result} =
+      :timer.tc(fn -> Database.Setup.reload_database(json, title_field, content_field, n) end)
+
+    IO.puts("Took: #{micros / 1000}")
+
+    IO.puts("Vectorizing vectors and building the full matrix")
+
+    {micros, _result} =
+      :timer.tc(fn -> Database.Setup.vectorize_documents_and_build_matrix(base_matrix_name) end)
+    IO.puts("Took: #{micros / 1000}")
   end
 
   def reload_database() do

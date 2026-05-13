@@ -8,8 +8,7 @@ from scipy.sparse import csr_matrix, save_npz, load_npz
 
 
 def load_matrix(db_path, matrix_name):
-    """Loads the matrix, using a fast .npz cache if available."""
-    cache_file = f"{matrix_name}_cache.npz"
+    cache_file = f"data/db/{matrix_name}_cache.npz"
 
     if os.path.exists(cache_file):
         print(f"Loading cached matrix from {cache_file}...", file=sys.stderr)
@@ -18,7 +17,7 @@ def load_matrix(db_path, matrix_name):
         return A_T, max_term_id
 
     print(
-        f"Building matrix '{matrix_name}' from SQLite (this may take a while)...",
+        f"Building matrix '{matrix_name}' from SQLite",
         file=sys.stderr,
     )
     conn = sqlite3.connect(db_path)
@@ -49,7 +48,7 @@ def load_matrix(db_path, matrix_name):
         (vals, (doc_ids, term_ids)), shape=(max_doc_id + 1, max_term_id + 1)
     )
 
-    print(f"Saving matrix to {cache_file} for fast future loads...", file=sys.stderr)
+    print(f"Saving matrix to {cache_file}", file=sys.stderr)
     save_npz(cache_file, A_T)
 
     return A_T, max_term_id
