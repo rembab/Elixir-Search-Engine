@@ -46,8 +46,10 @@ defmodule Database.Setup do
           text = doc.title <> " " <> doc.content
           words = SEMath.stem_text(text)
 
-          vector = SEMath.words_to_vector(words, total_docs, dict_map)
-            
+          vector = 
+          SEMath.words_to_vector(words, total_docs, dict_map) 
+          |> SEMath.normalize_doc_vector()
+
           %{id: doc.id, embed: vector}
         end)
 
@@ -59,7 +61,7 @@ defmodule Database.Setup do
         end)
 
       Database.batch_update_embeds(updates)
-      Database.batch_write_matrix(matrix_name,matrix_entries)
+      Database.batch_write_matrix(matrix_name, matrix_entries)
     end)
     |> Stream.run()
   end

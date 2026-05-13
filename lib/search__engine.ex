@@ -13,6 +13,7 @@ defmodule Search_Engine do
   """
   def start() do
     Database.start_link("data/db/arxiv.db")
+    PythonPort.start_link("data/db/arxiv.db")
   end
 
   def reload_database(n) do
@@ -33,5 +34,8 @@ defmodule Search_Engine do
 
   def show_dict() do
     Database.get_dictionary_map()
+  end
+
+  def query() do
   end
 end

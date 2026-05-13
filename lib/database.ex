@@ -31,6 +31,14 @@ defmodule Database do
     GenServer.call(__MODULE__, {:prepare_matrix_table, name})
   end
 
+  def fetch_document_column(matrix_name, doc_id) when is_binary(matrix_name) do
+    GenServer.call(__MODULE__, {:fetch_doc_col, matrix_name, doc_id})
+  end
+
+  def update_document_column(matrix_name, doc_id, entries) when is_list(entries) do
+    GenServer.call(__MODULE__, {:update_doc_col, matrix_name, doc_id, entries}, :infinity)
+  end
+
   def stream_documents() do
     db_path = GenServer.call(__MODULE__, :get_db_path)
 
@@ -243,6 +251,41 @@ defmodule Database do
     {:reply, :ok, state}
   end
 
+@impl true
+  def handle_call({:fetch_doc_col, matrix_name, doc_id}, _from, %{conn: conn} = state) do
+    query = "SELECT term_id, val FROM #{matrix_name} WHERE doc_id = ?1"
+    
+    {:ok, statement} = Sqlite3.prepare(conn, query)
+    :ok = Sqlite3.bind(statement, [doc_id])
+
+    entries = fetch_col_rows(conn, statement, [])
+
+    :ok = Sqlite3.release(conn, statement)
+    {:reply, entries, state}
+  end
+
+  @impl true
+  def handle_call({:update_doc_col, matrix_name, doc_id, entries}, _from, %{conn: conn} = state) do
+    :ok = Sqlite3.execute(conn, "BEGIN TRANSACTION")
+
+    query = """
+    INSERT INTO #{matrix_name} (doc_id, term_id, val)
+    VALUES (?1, ?2, ?3)
+    ON CONFLICT(doc_id, term_id) DO UPDATE SET val = excluded.val
+    """
+    {:ok, statement} = Sqlite3.prepare(conn, query)
+
+    Enum.each(entries, fn %{term_id: term_id, val: val} ->
+      :ok = Sqlite3.bind(statement, [doc_id, term_id, val])
+      :done = Sqlite3.step(conn, statement)
+    end)
+
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.execute(conn, "COMMIT")
+
+    {:reply, :ok, state}
+  end
+
   @impl true
   def handle_call(:get_db_path, _from, %{db_path: db_path} = state) do
     {:reply, db_path, state}
@@ -253,6 +296,17 @@ defmodule Database do
   def terminate(_reason, %{conn: conn}) do
     Sqlite3.close(conn)
   end
+
+  defp fetch_col_rows(conn, statement, acc) do
+    case Sqlite3.step(conn, statement) do
+      {:row, [term_id, val]} ->
+        fetch_col_rows(conn, statement, [%{term_id: term_id, val: val} | acc])
+
+      :done ->
+        Enum.reverse(acc)
+    end
+  end
+
 
   defp fetch_dict_rows(conn, statement, acc) do
     case Sqlite3.step(conn, statement) do

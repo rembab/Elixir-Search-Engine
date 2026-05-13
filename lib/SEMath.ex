@@ -33,19 +33,33 @@ defmodule SEMath do
     |> Enum.into(%{})
   end
 
-  def words_to_vector(words, total_docs, dict_map) do
-      tf_map = Enum.frequencies(words)
-      Enum.reduce(tf_map, [], fn {word, tf}, acc ->
-              case Map.get(dict_map, word) do
-                {word_id, df, _} when df > 0 ->
-                  idf = :math.log(total_docs / df)
-                  weight = tf * idf
-                  [{word_id, weight} | acc]
 
-                _ ->
-                  acc
-              end
-            end)
+  def words_to_vector(words, total_docs, dict_map) do
+    tf_map = Enum.frequencies(words)
+
+    Enum.reduce(tf_map, [], fn {word, tf}, acc ->
+      case Map.get(dict_map, word) do
+        {word_id, df, _} when df > 0 ->
+          idf = :math.log(total_docs / df)
+          weight = tf * idf
+          [{word_id, weight} | acc]
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+
+  def normalize_doc_vector(vector) do
+    sqr_sum = Enum.reduce(vector, 0, fn {_term_id, val}, acc ->
+      acc + (val * val)
+    end)
+    
+    len_vec = :math.sqrt(sqr_sum)
+
+    vector 
+    |> Enum.map(fn {term_id, val} -> {term_id, val / len_vec} end)
 
   end
 end
