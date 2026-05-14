@@ -26,7 +26,7 @@ defmodule Search_Engine do
         json \\ "data/arxiv_metadata.json",
         title_field \\ "title",
         content_field \\ "abstract",
-        base_matrix_name \\ "full_matrix",
+        base_matrix_name \\ "matrix_full",
         n
       ) do
     IO.puts("Loading documents and dictionary")
@@ -40,6 +40,7 @@ defmodule Search_Engine do
 
     {micros, _result} =
       :timer.tc(fn -> Database.Setup.vectorize_documents_and_build_matrix(base_matrix_name) end)
+
     IO.puts("Took: #{micros / 1000}")
   end
 
@@ -59,6 +60,26 @@ defmodule Search_Engine do
     Database.get_dictionary_map()
   end
 
-  def query() do
+  def search(query, k \\ nil, num_results \\ 10) do
+    %{"results" => results} =
+      case Database.matrix_table_exists(k_matrix(k)) do
+        true ->
+          PythonPort.search(k_matrix(k), query, num_results)
+
+        false ->
+          PythonPort.calculate_svd("matrix_full", k_matrix(k), k)
+          PythonPort.search(k_matrix(k), query, num_results)
+      end
+
+    results
+    |> Enum.map(fn %{"doc_id" => doc_id} -> Database.get_doc_by_id(doc_id) end)
+    |> Enum.map(fn {title, content} -> {Text.Clean.clean(title), Text.Clean.clean(content)} end)
+  end
+
+  defp k_matrix(k) do
+    case k do
+      n when is_number(n) -> "matrix_#{k}"
+      _ -> "matrix_full"
+    end
   end
 end

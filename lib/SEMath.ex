@@ -33,7 +33,6 @@ defmodule SEMath do
     |> Enum.into(%{})
   end
 
-
   def words_to_vector(words, total_docs, dict_map) do
     tf_map = Enum.frequencies(words)
 
@@ -50,16 +49,15 @@ defmodule SEMath do
     end)
   end
 
-
   def normalize_doc_vector(vector) do
-    sqr_sum = Enum.reduce(vector, 0, fn {_term_id, val}, acc ->
-      acc + (val * val)
-    end)
-    
+    sqr_sum =
+      Enum.reduce(vector, 0, fn {_term_id, val}, acc ->
+        acc + val * val
+      end)
+
     len_vec = :math.sqrt(sqr_sum)
 
-    vector 
+    vector
     |> Enum.map(fn {term_id, val} -> {term_id, val / len_vec} end)
-
   end
 end

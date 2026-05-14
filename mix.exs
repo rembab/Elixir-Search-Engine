@@ -23,7 +23,7 @@ defmodule Search_Engine.MixProject do
     [
       {:nx, "~> 0.11.0"},
       {:text, "~> 0.6.0"},
-      {:json_polyfill, "~> 0.1"},
+      {:json_polyfill, "~> 0.2"},
       {:stemmer, "~> 1.2"},
       {:exqlite, "~> 0.27"}
       # {:dep_from_hexpm, "~> 0.3.0"},

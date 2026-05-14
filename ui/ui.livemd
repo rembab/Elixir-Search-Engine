@@ -1,0 +1,39 @@
+<!-- livebook:{"app_settings":{"access_type":"public","slug":"ouwrhvwe7rg"}} -->
+
+# Search Engine
+
+```elixir
+Mix.install(
+  [
+    {:search_engine, path: Path.join(__DIR__, ".."), env: :dev},
+    {:kino, "~> 0.12.0"},
+    {:kino_vega_lite, "~> 0.1.11"}
+  ],
+  lockfile: :search_engine
+)
+```
+
+## Starting the search engine
+
+```elixir
+Search_Engine.start()
+Search_Engine.reload_database(1000)
+```
+
+```elixir
+form =
+  Kino.Control.form(
+    [
+      query: Kino.Input.text("Search query"),
+      k: Kino.Input.number("k value. When not provided no noise reduction is performed")
+    ],
+    submit: "Search"
+  )
+
+Kino.listen(form, fn %{data: %{k: k, query: query}} ->
+  Search_Engine.search(query, k, 1)
+  |> Enum.each(fn{title, content} -> IO.puts(title <> "\n" <> content <> "\n\n\n") end)
+end)
+
+form
+```
