@@ -28,7 +28,7 @@ defmodule Search_Engine do
 
     IO.puts("Took: #{micros / 1000} ms")
 
-    IO.puts("Vectorizing vectors and building the full matrix")
+    IO.puts("Vectorizing documents and building the full matrix")
 
     {micros, _result} =
       :timer.tc(fn -> Database.Setup.vectorize_documents_and_build_matrix(base_matrix_name) end)
@@ -40,14 +40,23 @@ defmodule Search_Engine do
     reload_database(500_000, 500_000)
   end
 
+  def profile_reload(n, k) do
+    :eprof.start()
+    :eprof.profile(fn -> reload_database(n, k) end)
+    :eprof.analyze()
+    :eprof.stop()
+  end
+
   def search(query, k \\ nil, num_results \\ 10) do
     words = SEMath.stem_text(query)
     dict_map = Database.get_dictionary_map(words)
-    total_docs = Database.count()
+    ## total_docs = Database.count()
 
-    query_vector =
-      SEMath.words_to_vector(words, total_docs, dict_map)
-      |> SEMath.normalize_doc_vector()
+    ## query_vector =
+    ## SEMath.words_to_vector(words, total_docs, dict_map)
+    ## |> SEMath.normalize_doc_vector()
+
+    query_vector = SEMath.query_to_bm25_vector(words, dict_map)
 
     if Enum.empty?(query_vector) do
       []
@@ -63,7 +72,16 @@ defmodule Search_Engine do
 
       unless is_ready do
         if is_number(k) do
-          PythonPort.calculate_svd("matrix_full", matrix_to_use, k)
+          IO.puts(
+            "Preparing matrix for new k value. This may take a while during the first search"
+          )
+
+          {micros, _result} =
+            :timer.tc(fn ->
+              PythonPort.calculate_svd("matrix_full", matrix_to_use, k)
+            end)
+
+          IO.puts("Took: #{micros / 1000} ms")
         end
       end
 

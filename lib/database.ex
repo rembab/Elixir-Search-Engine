@@ -107,6 +107,10 @@ defmodule Database do
     )
   end
 
+  def get_avgdl(total_docs) do
+    GenServer.call(__MODULE__, {:get_avgdl, total_docs}, :infinity)
+  end
+
   @impl true
   def init(db_path) do
     {:ok, conn} = Sqlite3.open(db_path)
@@ -118,6 +122,23 @@ defmodule Database do
     :ok = Sqlite3.execute(conn, "PRAGMA journal_size_limit = 524288000;")
     create_tables(conn)
     {:ok, %{conn: conn, db_path: db_path}}
+  end
+
+  @impl true
+  def handle_call({:get_avgdl, total_docs}, _from, %{conn: conn} = state) do
+    {:ok, statement} = Sqlite3.prepare(conn, "SELECT SUM(global_frequency) FROM dictionary")
+
+    sum_gf =
+      case Sqlite3.step(conn, statement) do
+        {:row, [sum]} when is_integer(sum) -> sum
+        _ -> 0
+      end
+
+    :ok = Sqlite3.release(conn, statement)
+
+    avgdl = if total_docs > 0, do: sum_gf / total_docs, else: 1.0
+
+    {:reply, avgdl, state}
   end
 
   @impl true
@@ -404,7 +425,7 @@ defmodule Database do
 
     {:ok, statement} = Sqlite3.prepare(conn, query)
 
-    Enum.each(vals, fn %{doc_id: doc_id, term_id: term_id, val: val} ->
+    Enum.each(vals, fn {doc_id, term_id, val} ->
       :ok = Sqlite3.bind(statement, [doc_id, term_id, val])
       :done = Sqlite3.step(conn, statement)
     end)

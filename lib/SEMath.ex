@@ -60,4 +60,50 @@ defmodule SEMath do
     vector
     |> Enum.map(fn {term_id, val} -> {term_id, val / len_vec} end)
   end
+
+  def doc_to_bm25_vector(words, total_docs, dict_map, avgdl, k1 \\ 1.5, b \\ 0.75) do
+    doc_length = length(words)
+
+    safe_avgdl =
+      case avgdl do
+        val when is_number(val) and val > 0 -> val * 1.0
+        _ -> 1.0
+      end
+
+    if doc_length == 0 do
+      []
+    else
+      k_doc_norm = k1 * (1.0 - b + b * (doc_length / safe_avgdl))
+      k1_plus_1 = k1 + 1.0
+
+      n_05 = (total_docs || 0) + 0.5
+
+      words
+      |> Enum.frequencies()
+      |> Enum.reduce([], fn {word, tf}, acc ->
+        case Map.get(dict_map, word) do
+          {word_id, df, _gf} when df > 0 ->
+            idf = :math.log(1.0 + (n_05 - df) / (df + 0.5))
+            tf_part = tf * k1_plus_1 / (tf + k_doc_norm)
+
+            weight = idf * tf_part
+            [{word_id, weight} | acc]
+
+          _ ->
+            acc
+        end
+      end)
+    end
+  end
+
+  def query_to_bm25_vector(query_words, dict_map) do
+    query_words
+    |> Enum.uniq()
+    |> Enum.reduce([], fn word, acc ->
+      case Map.get(dict_map, word) do
+        {word_id, _df, _gf} -> [{word_id, 1.0} | acc]
+        _ -> acc
+      end
+    end)
+  end
 end

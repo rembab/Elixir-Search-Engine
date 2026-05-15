@@ -58,31 +58,31 @@ defmodule Database.Setup do
   def vectorize_documents_and_build_matrix(matrix_name) do
     total_docs = Database.count()
     dict_map = Database.get_dictionary_map()
+    avg_dl = Database.get_avgdl(total_docs)
     Database.prepare_matrix_table(matrix_name)
 
     Database.stream_documents()
     |> Stream.chunk_every(100_000)
     |> Stream.each(fn chunk ->
-      results =
+      {updates, matrix_entries} =
         chunk
         |> Flow.from_enumerable()
         |> Flow.map(fn doc ->
           vector =
-            SEMath.words_to_vector(doc.stemmed, total_docs, dict_map)
-            |> SEMath.normalize_doc_vector()
+            SEMath.doc_to_bm25_vector(doc.stemmed, total_docs, dict_map, avg_dl)
 
           update = %{id: doc.id, embed: vector}
 
           entries =
             Enum.map(vector, fn {term_id, weight} ->
-              %{doc_id: doc.id, term_id: term_id, val: weight}
+              {doc.id, term_id, weight}
             end)
 
           {update, entries}
         end)
-        |> Enum.to_list()
-
-      {updates, matrix_entries} = Enum.unzip(results)
+        |> Enum.reduce({[], []}, fn {update, entries}, {acc_updates, acc_entries} ->
+          {[update | acc_updates], [entries | acc_entries]}
+        end)
 
       Database.batch_update_embeds(updates)
       Database.batch_write_matrix(matrix_name, List.flatten(matrix_entries))

@@ -5,7 +5,8 @@
 ```elixir
 Mix.install(
   [
-    {:search_engine, path: "/apps", env: :dev},
+    {:search_engine, path: ".", env: :dev},
+    ##{:search_engine, path: "/apps", env: :dev},
     {:kino, "~> 0.12.0"},
     {:kino_vega_lite, "~> 0.1.11"}
   ]
@@ -17,52 +18,91 @@ Mix.install(
 <!-- livebook:{"reevaluate_automatically":true} -->
 
 ```elixir
-header = Kino.HTML.new("""
-<div style="padding: 20px 0; border-bottom: 2px solid #e5e7eb; margin-bottom: 24px;">
-  <h1 style="margin: 0; color: #4F46E5; font-family: sans-serif;">Knowledge Base Search</h1>
-  <p style="color: #6B7280; font-size: 1.1em; margin-top: 8px;">Lightning fast internal document retrieval</p>
+setup_header = Kino.HTML.new("""
+<div style="margin-bottom: 8px;">
+  <h2 style="margin: 0; color: #4F46E5; font-family: sans-serif;">1. SETUP</h2>
 </div>
 """)
 
-status_frame = Kino.Frame.new()
-Kino.Frame.render(status_frame, Kino.Markdown.new("Engine Status: **Waiting for startup...**"))
+setup_form = Kino.Control.form(
+  [
+    db_name: Kino.Input.text("Database Name", default: "main_database.db")
+  ],
+  submit: "Initialize Database"
+)
+setup_status = Kino.Frame.new()
 
-start_btn = Kino.Control.button("Initialize Search Engine")
-stop_btn = Kino.Control.button("Stop Database")
+setup_section = Kino.Layout.grid([setup_header, setup_form, setup_status], gap: 16)
 
-Kino.listen(start_btn, fn _ -> 
-  Search_Engine.start()
-  Kino.Frame.render(status_frame, Kino.Markdown.new("Engine Status: **Online & Ready**"))
-end)
+prepare_header = Kino.HTML.new("""
+<div style="margin-bottom: 8px;">
+  <h2 style="margin: 0; color: #4F46E5; font-family: sans-serif;">2. PREPARE DATABASE</h2>
+</div>
+""")
 
-Kino.listen(stop_btn, fn _ -> 
-  GenServer.stop(Database)
-  Kino.Frame.render(status_frame, Kino.Markdown.new("Engine Status: **Offline**"))
-end)
+prepare_form = Kino.Control.form(
+  [
+    json_dir: Kino.Input.text("JSON Directory", default: "data/arxiv"),
+    title_field: Kino.Input.text("Title Field Key", default: "title"),
+    content_field: Kino.Input.text("Content Field Key", default: "abstract"),
+    num_docs: Kino.Input.number("Number of Documents", default: 300_000),
+    num_terms: Kino.Input.number("Number of Terms", default: 150_000)
+  ],
+  submit: "Prepare Data"
+)
+prepare_status = Kino.Frame.new()
 
-engine_controls = Kino.Layout.grid([
-  status_frame, 
-  Kino.Layout.grid([start_btn, stop_btn], columns: 2)
-], gap: 16)
+prepare_section = Kino.Layout.grid([prepare_header, prepare_form, prepare_status], gap: 16)
 
-form = Kino.Control.form(
+search_header = Kino.HTML.new("""
+<div style="margin-bottom: 8px;">
+  <h2 style="margin: 0; color: #4F46E5; font-family: sans-serif;">3. SEARCH</h2>
+</div>
+""")
+
+search_form = Kino.Control.form(
   [
     query: Kino.Input.text("Search Query"),
-    k: Kino.Input.number("Noise Reduction (k value) - Leave empty for none")
+    k: Kino.Input.number("Noise Reduction (k)", default: 300),
+    n: Kino.Input.number("Number of Results (n)", default: 10)
   ],
   submit: "Search",
   reset_on_submit: false
 )
-
 results_frame = Kino.Frame.new()
 
-Kino.listen(form, fn %{data: %{k: k, query: query}} ->
-  Kino.Frame.render(results_frame, Kino.Markdown.new("*Searching for '#{query}'...*"))
+search_section = Kino.Layout.grid([search_header, search_form, results_frame], gap: 16)
 
-  results = Search_Engine.search(query, k, 10)
+
+Kino.listen(setup_form, fn %{data: %{db_name: db_name}} ->
+  Kino.Frame.render(setup_status, Kino.Markdown.new("*Initializing*"))
+  
+  Search_Engine.start(db_name)
+  
+  Kino.Frame.render(setup_status, Kino.Markdown.new("**Success**"))
+end)
+
+Kino.listen(prepare_form, fn %{data: data} ->
+  Kino.Frame.render(prepare_status, Kino.Markdown.new("*Processing*"))
+
+  Search_Engine.reload_database(data.json_dir, 
+                                data.title_field, 
+                                data.content_field, 
+                                data.num_docs, 
+                                data.num_terms)
+  
+  Kino.Frame.render(prepare_status, Kino.Markdown.new("**Success**"))
+end)
+
+Kino.listen(search_form, fn %{data: %{k: k, n: n, query: query}} ->
+  Kino.Frame.render(results_frame, Kino.Markdown.new("*Searching for '#{query}'*"))
+
+  n_results = if is_nil(n), do: 10, else: n
+  
+  results = Search_Engine.search(query, k, n_results)
 
   if Enum.empty?(results) do
-     Kino.Frame.render(results_frame, Kino.Markdown.new("*No results found for your query.*"))
+     Kino.Frame.render(results_frame, Kino.Markdown.new("*No results found for query.*"))
   else
      html_cards = 
        Enum.map(results, fn {title, content} ->
@@ -84,12 +124,11 @@ Kino.listen(form, fn %{data: %{k: k, query: query}} ->
   end
 end)
 
-search_panel = Kino.Layout.grid([form, results_frame], gap: 24)
-
 Kino.Layout.grid([
-  header, 
-  engine_controls,
+  setup_section,
   Kino.Markdown.new("---"),
-  search_panel
-], gap: 24)
+  prepare_section,
+  Kino.Markdown.new("---"),
+  search_section
+], gap: 32)
 ```

@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-numpy \
     python3-scipy \
-    python3-scikit-learn \
+    python3-sklearn \
     erlang-tools \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m livebook \
