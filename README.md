@@ -59,4 +59,4 @@ If you have **mix** and **Elixir** installed simply clone the repository and eit
 ```bash
 iex -S mix
 ``` 
-
+**Note:** using both methods, the project might take a few minutes to compile.
