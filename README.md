@@ -1,4 +1,5 @@
 # Search Engine
+Created as part of Computational Methods in Science in Engineering at AGH Krakow.
 ## What is the project?
 It's a highly optimized search engine running on a **ErlangVM** via **Elixir**. It uses **livebook** for basic UI.
 
