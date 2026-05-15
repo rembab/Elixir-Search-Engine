@@ -48,6 +48,10 @@ Elixir might seem like an odd choice for this kind of project at first. Optimizi
 ### Method 1: docker image
 Simply run  the project's [docker image](https://hub.docker.com/repository/docker/rembab/search_engine/general) and open http://localhost:8080/apps in your browser. This will run the search engine as a livebook application in your browser. 
 
+The docker image is quite big and contains the affermentioned arXiv metadata dataset with 300000 loaded documents for demonstration purposes. Also includes a JSON file with top 1 million entries of the dataset. If you want to test the engine against more data you need to supply it with your own JSON dataset. 
+
+Since the data is already loaded into the database in the image, you can just boot the image, initalize the database and start typing queries and seeing the results.
+
 To run the docker image simply open your system's command line (terminal/cmd/powershell etc.) and execute:
 ```bash
 docker run -p 8080:8080 rembab/search_engine:latest
