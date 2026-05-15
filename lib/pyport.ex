@@ -5,11 +5,8 @@ defmodule PythonPort do
     GenServer.start_link(__MODULE__, db_path, name: __MODULE__)
   end
 
-  def search(matrix_name, query, top_k) do
-    words = SEMath.stem_text(query)
-    vector = SEMath.words_to_vector(words, Database.count(), Database.get_dictionary_map(words))
-
-    GenServer.call(__MODULE__, {:search, matrix_name, vector, top_k}, :infinity)
+  def search(matrix_name, query_vector, top_k) do
+    GenServer.call(__MODULE__, {:search, matrix_name, query_vector, top_k}, :infinity)
   end
 
   def calculate_svd(matrix_name, new_matrix_name, k) do
@@ -39,11 +36,12 @@ defmodule PythonPort do
     json_str = Jason.encode!(request)
     Port.command(state.port, json_str <> "\n")
 
-    receive do
-      {_port, {:data, {:eol, json_response}}} ->
+    case read_line_from_port(state.port, "", :infinity) do
+      {:ok, json_response} ->
         {:reply, Jason.decode!(json_response), state}
-    after
-      5000 -> {:reply, {:error, "Python script timed out"}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -59,9 +57,25 @@ defmodule PythonPort do
     json_str = Jason.encode!(request)
     Port.command(state.port, json_str <> "\n")
 
-    receive do
-      {_port, {:data, {:eol, json_response}}} ->
+    case read_line_from_port(state.port, "", :infinity) do
+      {:ok, json_response} ->
         {:reply, Jason.decode!(json_response), state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp read_line_from_port(port, acc, timeout) do
+    receive do
+      {^port, {:data, {:noeol, chunk}}} ->
+        read_line_from_port(port, acc <> chunk, timeout)
+
+      {^port, {:data, {:eol, line}}} ->
+        {:ok, acc <> line}
+    after
+      timeout ->
+        {:error, "Python script timed out"}
     end
   end
 end

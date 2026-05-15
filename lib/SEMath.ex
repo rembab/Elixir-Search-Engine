@@ -4,8 +4,8 @@ defmodule SEMath do
     |> String.replace(~r/[^\w\s]/u, "")
     |> String.downcase()
     |> String.split()
-    |> Enum.reject(&Text.Stopwords.contains?(:en, &1))
-    |> Enum.map(&Stemmer.stem(&1))
+    |> Enum.reject(&Stopwords.contains(&1))
+    |> Text.Stemmer.stem_list(:en)
   end
 
   def create_dict(str, text_key) do

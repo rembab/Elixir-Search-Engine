@@ -1,36 +1,58 @@
 defmodule Database.Setup do
-  def reload_database(json_path, title_field, content_field, n) do
-    GenServer.call(Database, :reset_table)
+  def reload_database(json_dir, title_field, content_field, n, n_dict) do
+    GenServer.call(Database, :reset_table, :infinity)
 
-    JsonLoader.load_n(json_path, [title_field, content_field], n)
+    JsonLoader.load_directory_n(json_dir, [title_field, content_field], n)
     |> Stream.map(fn map ->
       %{
         title: map[title_field] || "",
         content: map[content_field] || "",
+        stemmed: [],
         embed: [0]
       }
     end)
-    |> Stream.chunk_every(1000)
+    |> Stream.chunk_every(100_000)
     |> Stream.each(fn chunk ->
-      Database.batch_write_documents(chunk)
+      processed_docs =
+        chunk
+        |> Flow.from_enumerable()
+        |> Flow.map(fn doc ->
+          text = doc.title <> " " <> doc.content
+          stemmed_words = SEMath.stem_text(text)
+          %{doc | stemmed: stemmed_words}
+        end)
+        |> Enum.to_list()
+
+      Database.batch_write_documents(processed_docs)
 
       chunk_dict =
-        Enum.reduce(chunk, %{}, fn doc, acc ->
-          text = doc.title <> " " <> doc.content
-          words = SEMath.stem_text(text)
-
-          local_freqs = Enum.frequencies(words)
-
-          Enum.reduce(local_freqs, acc, fn {word, count}, inner_acc ->
-            Map.update(inner_acc, word, {1, count}, fn {current_df, current_tf} ->
-              {current_df + 1, current_tf + count}
-            end)
+        processed_docs
+        |> Flow.from_enumerable()
+        |> Flow.flat_map(fn doc ->
+          Enum.frequencies(doc.stemmed)
+          |> Enum.map(fn {word, count} -> {word, 1, count} end)
+        end)
+        |> Flow.partition(key: {:elem, 0})
+        |> Flow.reduce(fn -> %{} end, fn {word, df, tf}, acc ->
+          Map.update(acc, word, {df, tf}, fn {current_df, current_tf} ->
+            {current_df + df, current_tf + tf}
           end)
         end)
+        |> Enum.into(%{})
 
-      Database.batch_update_dictionary(chunk_dict)
+      Task.start(fn ->
+        Database.batch_update_dictionary(chunk_dict)
+      end)
     end)
     |> Stream.run()
+
+    Database.delete_single_words()
+
+    total_docs = Database.count()
+
+    Database.score_dictionary(total_docs)
+
+    Database.prune_dictionary(n_dict)
   end
 
   def vectorize_documents_and_build_matrix(matrix_name) do
@@ -39,29 +61,31 @@ defmodule Database.Setup do
     Database.prepare_matrix_table(matrix_name)
 
     Database.stream_documents()
-    |> Stream.chunk_every(1000)
+    |> Stream.chunk_every(100_000)
     |> Stream.each(fn chunk ->
-      updates =
-        Enum.map(chunk, fn doc ->
-          text = doc.title <> " " <> doc.content
-          words = SEMath.stem_text(text)
+      results =
+        chunk
+        |> Flow.from_enumerable()
+        |> Flow.map(fn doc ->
+          vector =
+            SEMath.words_to_vector(doc.stemmed, total_docs, dict_map)
+            |> SEMath.normalize_doc_vector()
 
-          vector = 
-          SEMath.words_to_vector(words, total_docs, dict_map) 
-          |> SEMath.normalize_doc_vector()
+          update = %{id: doc.id, embed: vector}
 
-          %{id: doc.id, embed: vector}
+          entries =
+            Enum.map(vector, fn {term_id, weight} ->
+              %{doc_id: doc.id, term_id: term_id, val: weight}
+            end)
+
+          {update, entries}
         end)
+        |> Enum.to_list()
 
-      matrix_entries =
-        Enum.flat_map(updates, fn %{id: doc_id, embed: vector} ->
-          Enum.map(vector, fn {term_id, weight} ->
-            %{doc_id: doc_id, term_id: term_id, val: weight}
-          end)
-        end)
+      {updates, matrix_entries} = Enum.unzip(results)
 
       Database.batch_update_embeds(updates)
-      Database.batch_write_matrix(matrix_name, matrix_entries)
+      Database.batch_write_matrix(matrix_name, List.flatten(matrix_entries))
     end)
     |> Stream.run()
   end

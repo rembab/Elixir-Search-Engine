@@ -1,0 +1,95 @@
+<!-- livebook:{"app_settings":{"access_type":"public","slug":"ouwrhvwe7rg"}} -->
+
+# Search Engine
+
+```elixir
+Mix.install(
+  [
+    {:search_engine, path: "/apps", env: :dev},
+    {:kino, "~> 0.12.0"},
+    {:kino_vega_lite, "~> 0.1.11"}
+  ]
+)
+```
+
+## Section
+
+<!-- livebook:{"reevaluate_automatically":true} -->
+
+```elixir
+header = Kino.HTML.new("""
+<div style="padding: 20px 0; border-bottom: 2px solid #e5e7eb; margin-bottom: 24px;">
+  <h1 style="margin: 0; color: #4F46E5; font-family: sans-serif;">Knowledge Base Search</h1>
+  <p style="color: #6B7280; font-size: 1.1em; margin-top: 8px;">Lightning fast internal document retrieval</p>
+</div>
+""")
+
+status_frame = Kino.Frame.new()
+Kino.Frame.render(status_frame, Kino.Markdown.new("Engine Status: **Waiting for startup...**"))
+
+start_btn = Kino.Control.button("Initialize Search Engine")
+stop_btn = Kino.Control.button("Stop Database")
+
+Kino.listen(start_btn, fn _ -> 
+  Search_Engine.start()
+  Kino.Frame.render(status_frame, Kino.Markdown.new("Engine Status: **Online & Ready**"))
+end)
+
+Kino.listen(stop_btn, fn _ -> 
+  GenServer.stop(Database)
+  Kino.Frame.render(status_frame, Kino.Markdown.new("Engine Status: **Offline**"))
+end)
+
+engine_controls = Kino.Layout.grid([
+  status_frame, 
+  Kino.Layout.grid([start_btn, stop_btn], columns: 2)
+], gap: 16)
+
+form = Kino.Control.form(
+  [
+    query: Kino.Input.text("Search Query"),
+    k: Kino.Input.number("Noise Reduction (k value) - Leave empty for none")
+  ],
+  submit: "Search",
+  reset_on_submit: false
+)
+
+results_frame = Kino.Frame.new()
+
+Kino.listen(form, fn %{data: %{k: k, query: query}} ->
+  Kino.Frame.render(results_frame, Kino.Markdown.new("*Searching for '#{query}'...*"))
+
+  results = Search_Engine.search(query, k, 10)
+
+  if Enum.empty?(results) do
+     Kino.Frame.render(results_frame, Kino.Markdown.new("*No results found for your query.*"))
+  else
+     html_cards = 
+       Enum.map(results, fn {title, content} ->
+         """
+         <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background: white;">
+           <h3 style="margin-top: 0; color: #111827; font-family: sans-serif;">#{Text.Clean.clean(title)}</h3>
+           <p style="color: #4B5563; line-height: 1.6; margin-bottom: 0;">#{Text.Clean.clean(content)}</p>
+         </div>
+         """
+       end)
+       |> Enum.join("\n")
+
+     container = """
+     <div style="max-height: 600px; overflow-y: auto; padding-right: 10px;">
+       #{html_cards}
+     </div>
+     """
+     Kino.Frame.render(results_frame, Kino.HTML.new(container))
+  end
+end)
+
+search_panel = Kino.Layout.grid([form, results_frame], gap: 24)
+
+Kino.Layout.grid([
+  header, 
+  engine_controls,
+  Kino.Markdown.new("---"),
+  search_panel
+], gap: 24)
+```

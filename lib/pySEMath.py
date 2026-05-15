@@ -5,7 +5,7 @@ import sqlite3
 import argparse
 import numpy as np
 from scipy.sparse import csr_matrix, save_npz, load_npz
-from scipy.sparse.linalg import svds
+from sklearn.decomposition import TruncatedSVD
 
 
 def load_matrix(db_path, matrix_name):
@@ -19,25 +19,35 @@ def load_matrix(db_path, matrix_name):
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
-    doc_ids, term_ids, vals = [], [], []
+    c.execute(f"SELECT COUNT(*) FROM {matrix_name}")
+    total_rows = c.fetchone()[0]
+
+    if total_rows == 0:
+        raise ValueError(f"Matrix {matrix_name} is empty.")
+
+    doc_ids = np.empty(total_rows, dtype=np.int32)
+    term_ids = np.empty(total_rows, dtype=np.int32)
+    vals = np.empty(total_rows, dtype=np.float32)
+
     c.execute(f"SELECT doc_id, term_id, val FROM {matrix_name}")
 
+    idx = 0
     while True:
         chunk = c.fetchmany(100000)
         if not chunk:
             break
-        for row in chunk:
-            doc_ids.append(row[0])
-            term_ids.append(row[1])
-            vals.append(row[2])
+
+        chunk_len = len(chunk)
+        arr = np.array(chunk)
+        doc_ids[idx : idx + chunk_len] = arr[:, 0]
+        term_ids[idx : idx + chunk_len] = arr[:, 1]
+        vals[idx : idx + chunk_len] = arr[:, 2]
+        idx += chunk_len
 
     conn.close()
 
-    if not vals:
-        raise ValueError(f"Matrix {matrix_name} is empty.")
-
-    max_doc_id = max(doc_ids)
-    max_term_id = max(term_ids)
+    max_doc_id = int(np.max(doc_ids))
+    max_term_id = int(np.max(term_ids))
 
     A_T = csr_matrix(
         (vals, (doc_ids, term_ids)), shape=(max_doc_id + 1, max_term_id + 1)
@@ -49,7 +59,8 @@ def load_matrix(db_path, matrix_name):
     return A_T, max_term_id
 
 
-def process_query(A_T, max_term_id, query_vector, top_k):
+def process_query(matrix_data, query_vector, top_k):
+    max_term_id = matrix_data["max_term_id"]
     q = np.zeros(max_term_id + 1)
 
     for item in query_vector:
@@ -57,7 +68,11 @@ def process_query(A_T, max_term_id, query_vector, top_k):
         if t_id is not None and t_id <= max_term_id:
             q[t_id] = weight
 
-    scores = A_T @ q
+    if matrix_data["type"] == "sparse":
+        scores = matrix_data["A_T"] @ q
+    else:
+        scores = matrix_data["u"] @ (matrix_data["s"] * (matrix_data["vt"] @ q))
+
     top_indices = np.argsort(scores)[-top_k:][::-1]
 
     results = []
@@ -73,43 +88,16 @@ def compute_and_save_svd(db_path, source_matrix, target_matrix, k):
 
     k = min(k, min(A_T.shape) - 1)
 
-    u, s, vt = svds(A_T.astype(float), k=k)
+    svd = TruncatedSVD(n_components=k, algorithm="randomized", random_state=42)
 
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
+    u = svd.fit_transform(A_T)
+    s = svd.singular_values_
+    vt = svd.components_
 
-    c.execute(f"DROP TABLE IF EXISTS {target_matrix}")
-    c.execute(f"""
-    CREATE TABLE {target_matrix} (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      doc_id INTEGER NOT NULL,
-      term_id INTEGER NOT NULL,
-      val FLOAT(24) NOT NULL,
-      UNIQUE(doc_id, term_id)
-    )
-    """)
+    u = u / s
 
-    s_vt = np.diag(s) @ vt
-
-    for doc_id in range(A_T.shape[0]):
-        row_dense = u[doc_id, :] @ s_vt
-
-        non_zeros = np.where(np.abs(row_dense) > 1e-4)[0]
-
-        if len(non_zeros) > 0:
-            rows_to_insert = [
-                (doc_id, int(t_id), float(row_dense[t_id])) for t_id in non_zeros
-            ]
-            c.executemany(
-                f"INSERT INTO {target_matrix} (doc_id, term_id, val) VALUES (?, ?, ?)",
-                rows_to_insert,
-            )
-
-        if doc_id > 0 and doc_id % 1000 == 0:
-            conn.commit()
-
-    conn.commit()
-    conn.close()
+    os.makedirs("data/db", exist_ok=True)
+    np.savez(f"data/db/{target_matrix}_svd.npz", u=u, s=s, vt=vt)
 
 
 if __name__ == "__main__":
@@ -118,6 +106,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     matrices = {}
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -133,12 +122,25 @@ if __name__ == "__main__":
                 top_k = request.get("top_k", 10)
 
                 if matrix_name not in matrices:
-                    A_T, max_term_id = load_matrix(args.db, matrix_name)
-                    matrices[matrix_name] = (A_T, max_term_id)
-                else:
-                    A_T, max_term_id = matrices[matrix_name]
+                    svd_cache = f"data/db/{matrix_name}_svd.npz"
+                    if os.path.exists(svd_cache):
+                        data = np.load(svd_cache)
+                        matrices[matrix_name] = {
+                            "type": "svd",
+                            "u": data["u"],
+                            "s": data["s"],
+                            "vt": data["vt"],
+                            "max_term_id": data["vt"].shape[1] - 1,
+                        }
+                    else:
+                        A_T, max_term_id = load_matrix(args.db, matrix_name)
+                        matrices[matrix_name] = {
+                            "type": "sparse",
+                            "A_T": A_T,
+                            "max_term_id": max_term_id,
+                        }
 
-                results = process_query(A_T, max_term_id, query_vector, top_k)
+                results = process_query(matrices[matrix_name], query_vector, top_k)
                 response = {"status": "ok", "results": results}
 
             elif action == "svd":
@@ -147,7 +149,10 @@ if __name__ == "__main__":
                 k = request["k"]
 
                 compute_and_save_svd(args.db, source_matrix, target_matrix, k)
-                response = {"status": "ok", "message": f"SVD saved to {target_matrix}"}
+                response = {
+                    "status": "ok",
+                    "message": f"SVD saved to {target_matrix}_svd.npz",
+                }
 
         except Exception as e:
             response = {"status": "error", "message": str(e)}

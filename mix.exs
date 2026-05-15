@@ -14,18 +14,19 @@ defmodule Search_Engine.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :tools]
     ]
   end
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:nx, "~> 0.11.0"},
-      {:text, "~> 0.6.0"},
-      {:json_polyfill, "~> 0.2"},
-      {:stemmer, "~> 1.2"},
-      {:exqlite, "~> 0.27"}
+      {:text, "~> 0.6.1"},
+      {:jaxon, "~> 2.0.4"},
+      {:text_stemmer, "~> 0.1"},
+      {:exqlite, "~> 0.27"},
+      {:flow, "~> 1.2"},
+      {:json_polyfill, "~> 0.2", app: false, override: true}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]

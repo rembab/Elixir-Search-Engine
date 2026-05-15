@@ -1,79 +1,82 @@
 defmodule Search_Engine do
-  @moduledoc """
-  Documentation for `Search_Engine`.
-  """
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> Search_Engine.hello()
-      :world
-
-  """
-
-  def start(db_name \\ "arxiv.db") do
+  def start(db_name \\ "main_database.db") do
     db_path = "data/db/#{db_name}"
-
-    IO.puts("Loading db #{db_name}")
     Database.start_link(db_path)
-
-    IO.puts("Starting python math engine")
     PythonPort.start_link(db_path)
   end
 
   def reload_database(
-        json \\ "data/arxiv_metadata.json",
+        json_directory \\ "data/arxiv",
         title_field \\ "title",
         content_field \\ "abstract",
         base_matrix_name \\ "matrix_full",
-        n
+        n,
+        n_d
       ) do
+    IO.puts("Wiping python caches")
+    Path.wildcard("data/db/*.npz") |> Enum.each(&File.rm/1)
+
+    if Process.whereis(PythonPort), do: GenServer.stop(PythonPort)
+    PythonPort.start_link("data/db/main_database.db")
+
     IO.puts("Loading documents and dictionary")
 
     {micros, _result} =
-      :timer.tc(fn -> Database.Setup.reload_database(json, title_field, content_field, n) end)
+      :timer.tc(fn ->
+        Database.Setup.reload_database(json_directory, title_field, content_field, n, n_d)
+      end)
 
-    IO.puts("Took: #{micros / 1000}")
+    IO.puts("Took: #{micros / 1000} ms")
 
     IO.puts("Vectorizing vectors and building the full matrix")
 
     {micros, _result} =
       :timer.tc(fn -> Database.Setup.vectorize_documents_and_build_matrix(base_matrix_name) end)
 
-    IO.puts("Took: #{micros / 1000}")
+    IO.puts("Took: #{micros / 1000} ms")
   end
 
   def reload_database() do
-    reload_database(1_000_000_000)
-  end
-
-  def show_docs(n) do
-    Database.stream_documents() |> Stream.take(n) |> Enum.to_list()
-  end
-
-  def show_docs() do
-    show_docs(1_000_000_000)
-  end
-
-  def show_dict() do
-    Database.get_dictionary_map()
+    reload_database(500_000, 500_000)
   end
 
   def search(query, k \\ nil, num_results \\ 10) do
-    %{"results" => results} =
-      case Database.matrix_table_exists(k_matrix(k)) do
-        true ->
-          PythonPort.search(k_matrix(k), query, num_results)
+    words = SEMath.stem_text(query)
+    dict_map = Database.get_dictionary_map(words)
+    total_docs = Database.count()
 
-        false ->
-          PythonPort.calculate_svd("matrix_full", k_matrix(k), k)
-          PythonPort.search(k_matrix(k), query, num_results)
+    query_vector =
+      SEMath.words_to_vector(words, total_docs, dict_map)
+      |> SEMath.normalize_doc_vector()
+
+    if Enum.empty?(query_vector) do
+      []
+    else
+      matrix_to_use = k_matrix(k)
+
+      is_ready =
+        if is_nil(k) do
+          Database.matrix_table_exists(matrix_to_use)
+        else
+          File.exists?("data/db/#{matrix_to_use}_svd.npz")
+        end
+
+      unless is_ready do
+        if is_number(k) do
+          PythonPort.calculate_svd("matrix_full", matrix_to_use, k)
+        end
       end
 
-    results
-    |> Enum.map(fn %{"doc_id" => doc_id} -> Database.get_doc_by_id(doc_id) end)
-    |> Enum.map(fn {title, content} -> {Text.Clean.clean(title), Text.Clean.clean(content)} end)
+      %{"results" => results} = PythonPort.search(matrix_to_use, query_vector, num_results)
+
+      results
+      |> Enum.map(fn %{"doc_id" => doc_id} -> Database.get_doc_by_id(doc_id) end)
+      |> Enum.map(fn {title, content} -> {Text.Clean.clean(title), Text.Clean.clean(content)} end)
+    end
+  end
+
+  def stop() do
+    GenServer.stop(Database)
   end
 
   defp k_matrix(k) do
