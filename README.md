@@ -43,3 +43,20 @@ Elixir might seem like an odd choice for this kind of project at first. Optimizi
 3. Theoretically, this engine is a great backbone to function on a server and handle queries from different connected devices seamlessly thanks to the Erlang VM,
 4. I wanted to learn Elixir, so I used this project to do so,
 5. Coding in Elixir is fun :).
+
+## How to run?
+### Method 1: docker image
+Simply run  the project's [docker image](https://hub.docker.com/repository/docker/rembab/search_engine/general) and open http://localhost:8080/apps in your browser. This will run the search engine as a livebook application in your browser. 
+
+To run the docker image simply open your system's command line (terminal/cmd/powershell etc.) and execute:
+```bash
+docker run -p 8080:8080 rembab/search_engine:latest
+```
+...or run it through the docker desktop app.
+
+### Method 2: run the project manually on your local environment
+If you have **mix** and **Elixir** installed simply clone the repository and either **open the ui.livemd in livebook** or **use your preferred CLI together with mix** (this limits you to the command line interface):
+```bash
+iex -S mix
+``` 
+
